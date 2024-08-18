@@ -1,5 +1,6 @@
 ![demo-gif](demo.gif)
-
+## Added features [Experimental]
+- Added a feature to select the camera device
 
 ## Disclaimer
 This software is meant to be a productive contribution to the rapidly growing AI-generated media industry. It will help artists with tasks such as animating a custom character or using the character as a model for clothing etc.

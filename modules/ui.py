@@ -12,6 +12,12 @@ from modules.capturer import get_video_frame, get_video_frame_total
 from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video, resolve_relative_path
 
+import subprocess
+import re
+
+import customtkinter as ctk
+from typing import List
+
 ROOT = None
 ROOT_HEIGHT = 700
 ROOT_WIDTH = 600
@@ -32,18 +38,29 @@ status_label = None
 
 img_ft, vid_ft = modules.globals.file_types
 
+# Camera 목록을 전역 변수로 선언
+camera_devices: List[str] = []
+selected_camera: ctk.StringVar = None
+camera_dropdown: ctk.CTkOptionMenu = None
 
 def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
-    global ROOT, PREVIEW
+    global ROOT, PREVIEW, camera_devices, selected_camera
 
+    # 카메라 장치 목록 가져오기
+    camera_devices = get_camera_names()
     ROOT = create_root(start, destroy)
     PREVIEW = create_preview(ROOT)
 
+    selected_camera = ctk.StringVar(value=camera_devices[0] if camera_devices else "No camera")
+
+    # 카메라 선택 드롭다운 추가
+    create_camera_dropdown(ROOT)
+    
     return ROOT
 
 
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
-    global source_label, target_label, status_label
+    global source_label, target_label, status_label, camera_dropdown
 
     ctk.deactivate_automatic_dpi_awareness()
     ctk.set_appearance_mode('system')
@@ -103,6 +120,9 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
 
     live_button = ctk.CTkButton(root, text='Live', cursor='hand2', command=lambda: webcam_preview())
     live_button.place(relx=0.40, rely=0.86, relwidth=0.2, relheight=0.05)
+
+    camera_dropdown = ctk.CTkOptionMenu(root, variable=selected_camera, values=camera_devices, command=lambda _: update_selected_camera())
+    camera_dropdown.place(relx=0.61, rely=0.86, relwidth=0.3, relheight=0.05)
 
     status_label = ctk.CTkLabel(root, text=None, justify='center')
     status_label.place(relx=0.1, rely=0.9, relwidth=0.8)
@@ -249,43 +269,88 @@ def update_preview(frame_number: int = 0) -> None:
         image = ctk.CTkImage(image, size=image.size)
         preview_label.configure(image=image)
 
+def get_camera_names():
+    camera_names = []
+    try:
+        # Run the DirectShow command to list video input devices
+        process = subprocess.Popen(
+            "ffmpeg -list_devices true -f dshow -i dummy",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=False,  # Changed to False
+            shell=True
+        )
+        
+        # Read the output (actually the error stream in this case)
+        output, _ = process.communicate()
+
+        # Decode the output using UTF-8 and ignore errors
+        output = output.decode('utf-8', errors='ignore')
+
+        # Use regex to find camera names
+        pattern = r'"(.*?)" \(video\)'
+        for match in re.finditer(pattern, output):
+            camera_names.append(match.group(1))
+    except Exception as e:
+        print(f"Error: Unable to retrieve camera names. {str(e)}")
+    return camera_names
+
+def create_camera_dropdown(root: ctk.CTk):
+    global camera_dropdown, selected_camera
+
+    camera_dropdown = ctk.CTkOptionMenu(root, variable=selected_camera, values=camera_devices, command=lambda _: update_selected_camera())
+    camera_dropdown.place(relx=0.61, rely=0.86, relwidth=0.3, relheight=0.05)
+
+def update_selected_camera():
+    # 선택된 카메라가 변경되었을 때 호출되는 함수
+    print(f"Selected camera: {selected_camera.get()}")
+
 def webcam_preview():
     if modules.globals.source_path is None:
         # No image selected
         return
 
-    global preview_label, PREVIEW
+    global preview_label, PREVIEW, camera_devices, selected_camera
 
-    cap = cv2.VideoCapture(0)  # Use index for the webcam (adjust the index accordingly if necessary)    
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)  # Set the width of the resolution
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)  # Set the height of the resolution
-    cap.set(cv2.CAP_PROP_FPS, 60)  # Set the frame rate of the webcam
+    # 선택된 카메라의 인덱스 가져오기
+    try:
+        inputSource = camera_devices.index(selected_camera.get())
+    except ValueError:
+        print("Selected camera not found in the list. Using default (0).")
+        inputSource = 0
+
+    print(f"Selected input source: {inputSource}")
+
+    cap = cv2.VideoCapture(inputSource+1)
+    
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)
+    cap.set(cv2.CAP_PROP_FPS, 60)
     PREVIEW_MAX_WIDTH = 960
     PREVIEW_MAX_HEIGHT = 540
 
-    preview_label.configure(image=None)  # Reset the preview image before startup
+    preview_label.configure(image=None)
 
-    PREVIEW.deiconify()  # Open preview window
+    PREVIEW.deiconify()
 
     frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
 
-    source_image = None  # Initialize variable for the selected face image
+    source_image = None
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # Select and save face image only once
         if source_image is None and modules.globals.source_path:
             source_image = get_one_face(cv2.imread(modules.globals.source_path))
 
-        temp_frame = frame.copy()  #Create a copy of the frame
+        temp_frame = frame.copy()
 
         for frame_processor in frame_processors:
             temp_frame = frame_processor.process_frame(source_image, temp_frame)
 
-        image = cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB)  # Convert the image to RGB format to display it with Tkinter
+        image = cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(image)
         image = ImageOps.contain(image, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS)
         image = ctk.CTkImage(image, size=image.size)
@@ -296,4 +361,4 @@ def webcam_preview():
             break
 
     cap.release()
-    PREVIEW.withdraw()  # Close preview window when loop is finished
+    PREVIEW.withdraw()
